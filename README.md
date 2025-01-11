@@ -59,3 +59,7 @@ into four categories:
 - sports
 - gaming
 - natural
+
+### How to use
+
+./webrtc-vmaf.py --codec vp8 --framerate 30 --bitrate-trace xx.csv xx.y4m 
