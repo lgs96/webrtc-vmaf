@@ -1,0 +1,1 @@
+./webrtc-vmaf.py --codec vp8 --framerate 30 --bitrate-trace /home/home/goodsol/workspace/QCON/webrtc/src/webrtc_logs/2025-01-11_03-49-50_real032/receiver/average_stats.csv /home/home/goodsol/workspace/QCON/webrtc/dataset/forza/forza_horizon5_4k2.y4m
