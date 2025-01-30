@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--framerate', default=30, type=int, help="Frame rate for encoding")
     parser.add_argument('--width', type=int, help="Width to encode (if omitted, use source)")
     parser.add_argument('--height', type=int, help="Height to encode (if omitted, use source)")
-    parser.add_argument('--bitrate-trace', required=True, help="CSV with one bitrate per row")
+    parser.add_argument('--bitrate-trace', required=False, help="CSV with one bitrate per row")
     parser.add_argument('--segment-duration', type=float, default=1.0,
                         help="Segment duration in seconds (defaults to 1s per CSV row)")
     parser.add_argument('--output', default="final_variant_output.mkv",
@@ -45,9 +45,12 @@ def main():
 
     # Read the per-second bitrates from CSV
     bitrates = read_bitrate_trace(args.bitrate_trace)
-    if not bitrates:
-        print(f"[ERROR] No valid bitrates found in {args.bitrate_trace}")
-        sys.exit(1)
+    #if not bitrates:
+    #    print(f"[ERROR] No valid bitrates found in {args.bitrate_trace}")
+    #    sys.exit(1)
+
+    #bitrates = [2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500,2500, 2500]
+    #bitrates = [4845.637, 9112.660, 4005.968, 6414.687, 9394.109, 6699.241,8779.241, 9961.915]
 
     # Gather info about the reference video
     ref_w, ref_h, ref_duration, _ = get_video_info(args.input, None, None)
@@ -76,7 +79,7 @@ def main():
     while seg_idx < len(bitrates):
         # Calculate segment start time (or simply seg_idx * duration, etc.)
         seg_start = (seg_idx * args.segment_duration) % ref_duration
-        bitrate = bitrates[seg_idx]
+        bitrate = bitrates[seg_idx%len(bitrates)]
 
         # Calculate appropriate resolution for this bitrate
         encode_w, encode_h = calculate_resolution(ref_w, ref_h, bitrate, args.framerate)
@@ -195,29 +198,45 @@ def main():
 # HELPERS
 ###############################################################################
 
-def compute_vmaf_segment(ref_file, dist_file,
-                         ref_width, ref_height,
-                         dist_width, dist_height,
-                         framerate=30,
-                         temp_dir=None):
+def compute_vmaf_segment(ref_file, dist_file, ref_width, ref_height, dist_width, dist_height, framerate=30, temp_dir=None):
     """
-    Compute VMAF scores for a segment and return frame-by-frame scores.
+    Compute VMAF scores between reference and distorted videos.
     Returns a list of VMAF scores for each frame.
+    
+    Parameters:
+    - ref_file: Path to reference video
+    - dist_file: Path to distorted video
+    - ref_width/height: Reference video dimensions
+    - dist_width/height: Distorted video dimensions
+    - framerate: Frame rate for VMAF computation
+    - temp_dir: Directory for temporary files (optional)
+    
+    Returns:
+    - List of frame-by-frame VMAF scores
     """
     # Create a temp JSON file for VMAF scores
     if temp_dir:
         temp_json = os.path.join(temp_dir, f"vmaf_scores_{int(time.time()*1000)}.json")
     else:
-        temp_json = "vmaf_scores.json"
+        temp_json = f"vmaf_scores_{int(time.time()*1000)}.json"
     temp_json = os.path.abspath(temp_json)
 
+    # Construct the filter string
     filter_str = (
         f'[0:v]fps={framerate},settb=AVTB,setpts=PTS-STARTPTS[ref];'
-        f'[1:v]fps={framerate},scale={dist_width}:{dist_height}:flags=bicubic,'
-        'settb=AVTB,setpts=PTS-STARTPTS[dist];'
+        f'[1:v]fps={framerate}'
+    )
+    
+    # Add scaling only if resolutions don't match
+    if ref_width != dist_width or ref_height != dist_height:
+        filter_str += f',scale={ref_width}:{ref_height}:flags=bicubic'
+        
+    filter_str += (
+        ',settb=AVTB,setpts=PTS-STARTPTS[dist];'
         f'[dist][ref]libvmaf=n_threads=8:log_path={temp_json}:log_fmt=json'
     )
 
+    # Run VMAF computation
     command = [
         'ffmpeg',
         '-i', ref_file,
@@ -227,21 +246,30 @@ def compute_vmaf_segment(ref_file, dist_file,
         '-'
     ]
 
-    process = subprocess.run(command, capture_output=True, text=True)
-    if process.returncode != 0:
-        print(f"[ERROR] FFmpeg for VMAF failed: {process.stderr}")
-        return []
-
-    # Read and parse the JSON file
-    frame_scores = []
+    # Execute FFmpeg command
     try:
+        process = subprocess.run(command, capture_output=True, text=True)
+        if process.returncode != 0:
+            print(f"[ERROR] FFmpeg VMAF computation failed: {process.stderr}")
+            return []
+
+        # Read and parse the JSON file
+        frame_scores = []
         with open(temp_json, 'r') as f:
             vmaf_data = json.load(f)
             frame_scores = [frame["metrics"]["vmaf"] for frame in vmaf_data["frames"]]
-    except Exception as e:
-        print(f"[ERROR] Failed to read VMAF scores from {temp_json}: {e}")
 
-    return frame_scores
+        # Clean up temporary JSON file
+        try:
+            os.remove(temp_json)
+        except OSError:
+            pass
+
+        return frame_scores
+
+    except Exception as e:
+        print(f"[ERROR] Failed to compute VMAF scores: {e}")
+        return []
 
 def calculate_resolution(original_width, original_height, bitrate, framerate):
     """

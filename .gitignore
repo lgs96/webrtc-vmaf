@@ -2,7 +2,7 @@ tmp_vmaf/
 tmp_vmaf_variant/
 *.mp4
 *.webm
-*.csv
 *.json
 *.y4m
+*.mkv
 *.log
